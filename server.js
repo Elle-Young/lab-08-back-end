@@ -1,96 +1,135 @@
+
 'use strict';
-//server
+
 const express = require('express');
-const cors = require('cors');
-const superAgent = require('superagent');
 
 require('dotenv').config();
 
+const cors = require('cors');
+
+const superagent = require ('superagent');
+
 const app = express();
 
-app.use(cors());
-const PORT= process.env.PORT || 3000
+app.use(express.static('public'));
 
-// constructor funcitons -------------------------------------------------------------------------------
-function Location(searchQuery, formatted_address, lat, long) {
+app.use(cors());
+
+const PORT = process.env.PORT || 3001;
+
+
+
+// routes
+app.get('/location', searchLatToLong);
+app.get('/weather', getWeather);
+app.get('/events', getEvents);
+
+
+// function that gets run when someone visits /location
+function searchLatToLong(request, response) {
+
+  //this is what client enters into search box when searching on the front end
+  //this is the city
+  let searchQuery = request.query.data;
+
+
+  // used Kyungrae's key
+  // the url is the API url
+  let URL = `https://maps.googleapis.com/maps/api/geocode/json?address=${searchQuery}&key=${process.env.GEOCODE_API_KEY}` 
+
+  // asking superagent to make an api request to google maps
+  superagent.get(URL)
+    .then(superagentResult => {
+      //if succesfull, we store the correct data in the variables we need 
+      let results = superagentResult.body.results[0];
+      const formatted_address = results.formatted_address;
+      const lat = results.geometry.location.lat;
+      const long = results.geometry.location.lng;
+
+
+     // creating a new location object instance using superagent results
+      const location = new Location(searchQuery, formatted_address, lat, long);
+
+      //send that data to the front end
+      response.status(200).send(location);
+
+    })
+    //if we fail we end up here
+    .catch(error => handleError(error, response)
+    )
+  }
+
+// function gets called when the /weather route gets hit 
+function getWeather(request, response) {
+    //this gets the location object from the request 
+    let locationDataObj = request.query.data;
+
+    //get the lat and long
+    let latitude = locationDataObj.latitude;
+    let longitude = locationDataObj.longitude;
+    
+
+    let URL = `https://api.darksky.net/forecast/${process.env.WEATHER_API_KEY}/${latitude},${longitude}`
+    
+    
+    superagent.get(URL)
+    .then(data =>{
+      let darkskyDataArr = data.body.daily.data;
+      const dailyArr = darkskyDataArr.map(day=>{
+        return new Weather(day);
+      })
+      response.send(dailyArr);
+    })
+    .catch(error => console.log(error));
+
+  }
+
+
+
+function getEvents(response, request){
+  let locationObj = request.query.data;
+  const url = `https://www.eventbriteapi.com/v3/events/search?location.longitude=${lng}&location.latitude=${lat}&expand=venue&token=${process.env.EVENT_API_KEY}&location.address=${locationObj.formatted_address}`
+
+  superagent.get(url)
+  .then(eventBriteData => {
+    const eventBriteInfo = eventBriteData.body.events.map(eventData => {
+      const event = new Event(eventData);
+      return event;
+    })
+    response.send(eventBriteInfo);
+  })
+  .catch(error => handleError(error, response));
+}
+
+
+function Event(eventBriteStuff){
+  this.link = eventBriteStuff.url;
+  this.name = eventBriteStuff.name.text;
+  this.event_date = new Date(eventBriteStuff.start.local).toDateString();
+  this.summary = eventBriteStuff.summary;
+}
+
+
+function Location(searchQuery, address, lat, long){
   this.search_query = searchQuery;
-  this.formatted_query = formatted_address;
+  this.formatted_address = address;
   this.latitude = lat;
   this.longitude = long;
 }
 
-function Forecast(summary, time) {
-  this.forecast = summary;
-  this.time = new Date(time *1000).toDateString();
+function Weather(darkSkyData){
+  this.forecast = darkSkyData.summary;
+  this.time = new Date(darkSkyData.time*1000).toDateString();
 }
 
-function Event(eventBriteStuff) {
-  this.link = eventBriteStuff.url;
-  this.name = eventBriteStuff.name.text;
-  this.event_date = new Date(eventBriteStuff.local).toDateString();
-  this.summary = eventBriteStuff.summary;
+// our error handler
+function handleError(error, response){
+  console.error(error);
+  const errorObj = {
+    status: 500,
+    text: 'Sorry, something went wrong'
+  }
+  response.status(500).send(errorObj);
 }
 
-// get data from APIs--- -------------------------------------------------------------------------------
-app.get('/location', (request, response) => {
-  let searchQuery = request.query.data;
-  let geocodeurl = `https://maps.googleapis.com/maps/api/geocode/json?address=${searchQuery}&key=${process.env.GEOCODE_API_KEY}`;
-
-  superAgent.get(geocodeurl)
-  .then(responsefromAgent => {
-      console.log(responsefromAgent.body);
-      const formatted_address = responsefromAgent.body.results[0].formatted_address;
-      const lat = responsefromAgent.body.results[0].geometry.location.lat;
-      const long = responsefromAgent.body.results[0].geometry.location.lng;
-      const location = new Location(searchQuery, formatted_address, lat, long)
-      response.status(200).send(location);
-    })
-    .catch(error => {
-      console.log('Something went wrong in geocode', error);
-    })
-})
-
-app.get('/weather', (request, response) => {
-  let locationDataObj = request.query.data;
-  let latitude = locationDataObj.latitude;
-  let longitude = locationDataObj.longitude;
-  let URL = `https://api.darksky.net/forecast/${process.env.DARKSKY}/${latitude},${longitude}`;
-
-  superAgent.get(URL)
-    .then(dataFromWeather => {
-      let weatherDataResults = dataFromWeather.body.daily.data;
-      const dailyArray = weatherDataResults.map(day => new Forecast(day.summary, day.time));
-
-      response.send(dailyArray);
-    })
-    .catch(error => {
-      console.log('Something went wrong in weather', error);
-    })
-});
-
-app.get('/event', (request, response) => {
-  let locationObj = request.query.data;
-  const eventUrl = `http://www.eventbriteapi.com/v3/events/search?token=${process.env.EVENTBRITE}&location.address=${locationObj.formatted_address}`;
-
-  // console.log('LOCATION', locationObj);
-  superAgent.get(eventUrl)
-    .then(eventBriteData => {
-      // console.log('THIS IS EVENT', eventBriteData);
-      const eventBriteInfo = eventBriteData.body.events.map(eventData => {
-        const event = new Event(eventData);
-        return event;
-      })
-      // const eventBriteInfo = eventBriteData.body.events.map(eventData => new Event(eventData));
-
-      response.send(eventBriteInfo);
-    })
-    .catch(error => {
-      console.log('Something went wrong with events', error);
-    })
-});
-
-app.use('*', (request, response) => {
-  response.status(500).send('Sorry, something went wrong');
-});
-
-app.listen(PORT, () => {console.log(`listening on port ${PORT}`)});
+app.listen(PORT, () => console.log(`listening on ${PORT}`));
